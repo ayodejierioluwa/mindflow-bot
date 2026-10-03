@@ -1,0 +1,17 @@
+services:
+  - type: worker
+    name: mindflow-telegram-bot
+    env: python
+    region: frankfurt
+    plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "python3 -m src.main"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: ADMIN_CHAT_ID
+        sync: false
