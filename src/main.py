@@ -23,11 +23,12 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 @dp.message(CommandStart())
 async def handle_start(message: types.Message):
     welcome_text = (
-        "🧠 **Welcome to your AI Second Brain!**\n\n"
+        "🌊 **Welcome to Mindflow!**\n"
+        "_Speak your mind. We handle the flow._\n\n"
         "Never let a thought, task, or expense slip away.\n\n"
         "**How to use:**\n"
         "• 🎙 **Send a voice note:** Rambling thoughts, tasks, or follow-ups.\n"
-        "• 💬 **Send a text message:** Quick tasks or braindump.\n"
+        "• 💬 **Send a text message:** Quick tasks or brain-dump.\n"
         "• 🧾 **Send a receipt photo:** (Coming soon) Auto-logs expenses.\n\n"
         "Try sending a voice note or text like: \n"
         "_\"Spent $14 on lunch at Chipotle\"_ or \n"

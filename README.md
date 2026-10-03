@@ -1,6 +1,8 @@
-# 🧠 Second Brain AI Telegram Assistant
+# 🌊 Mindflow — AI Voice & Thought Assistant for Telegram
 
-An AI-powered Telegram personal assistant that transforms voice notes, quick thoughts, and expenses into structured tasks, bookmarks, and records.
+> **"Speak your mind. We handle the flow."**
+
+Mindflow is an AI-powered Telegram personal assistant that transforms voice notes, quick thoughts, and expenses into structured tasks, bookmarks, and records in seconds.
 
 ## 🚀 Features
 - 🎙 **Voice-to-Text in <1s**: Speak naturally while walking or driving using Groq Whisper.
