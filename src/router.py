@@ -32,38 +32,41 @@ class IntentRouter:
 
     async def parse_text(self, text: str) -> ParsedCapture:
         """Parses raw text into structured ParsedCapture model."""
-        # Preference: Gemini 1.5 Flash (free tier) or OpenAI / Groq
-        if self.gemini_key:
-            return await self._parse_with_gemini(text)
-        elif self.openai_key:
-            return await self._parse_with_openai(text)
-        elif self.groq_key:
-            return await self._parse_with_groq(text)
-        else:
-            # Fallback mock for local testing without active API keys
-            return self._mock_parse(text)
-
-    async def _parse_with_openai(self, text: str) -> ParsedCapture:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=self.openai_key)
+        # Preference: Groq (ultra-fast, active and free) -> Gemini -> OpenAI -> Fallback Mock
+        if self.groq_key:
+            try:
+                return await self._parse_with_groq(text)
+            except Exception as e:
+                logger.warning(f"Groq parsing failed, falling back: {e}")
         
-        response = await client.beta.chat.completions.parse(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": text}
-            ],
-            response_format=ParsedCapture,
-        )
-        return response.choices[0].message.parsed
+        if self.gemini_key:
+            try:
+                return await self._parse_with_gemini(text)
+            except Exception as e:
+                logger.warning(f"Gemini parsing failed, falling back: {e}")
+
+        if self.openai_key:
+            try:
+                return await self._parse_with_openai(text)
+            except Exception as e:
+                logger.warning(f"OpenAI parsing failed: {e}")
+
+        return self._mock_parse(text)
 
     async def _parse_with_groq(self, text: str) -> ParsedCapture:
         from groq import AsyncGroq
         client = AsyncGroq(api_key=self.groq_key)
         
-        prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nSchema:\n{json.dumps(ParsedCapture.model_json_schema())}\n\nInput: {text}\n\nReturn strictly valid JSON only."
+        schema = ParsedCapture.model_json_schema()
+        prompt = (
+            f"{EXTRACTION_SYSTEM_PROMPT}\n\n"
+            f"Target JSON Schema:\n{json.dumps(schema)}\n\n"
+            f"User Input: \"{text}\"\n\n"
+            f"Return strictly a raw JSON object matching the schema above."
+        )
+        
         response = await client.chat.completions.create(
-            model="llama-3.1-70b-versatile",
+            model="qwen/qwen3.8-27b",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
@@ -72,12 +75,18 @@ class IntentRouter:
 
     async def _parse_with_gemini(self, text: str) -> ParsedCapture:
         import httpx
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.gemini_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={self.gemini_key}"
+        schema = ParsedCapture.model_json_schema()
+        prompt = (
+            f"{EXTRACTION_SYSTEM_PROMPT}\n\n"
+            f"Target JSON Schema:\n{json.dumps(schema)}\n\n"
+            f"User Input: \"{text}\"\n\n"
+            f"Return strictly a raw JSON object matching the schema above."
+        )
         payload = {
-            "contents": [{"parts": [{"text": f"{EXTRACTION_SYSTEM_PROMPT}\n\nUser input: {text}"}]}],
+            "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "response_mime_type": "application/json",
-                "response_schema": ParsedCapture.model_json_schema()
+                "response_mime_type": "application/json"
             }
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
