@@ -46,14 +46,14 @@ class StorageService:
 
     async def can_user_execute(self, user_id: int) -> tuple[bool, int, bool]:
         """
-        Returns (can_execute, current_count, is_pro)
+        Returns (can_execute, current_count, is_pro). Always returns True if DB is unavailable.
         """
         if not self.is_configured():
             return True, 0, True
         headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
         url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
         try:
-            async with httpx.AsyncClient(timeout=10.0) as client:
+            async with httpx.AsyncClient(timeout=4.0) as client:
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200 and res.json():
                     u = res.json()[0]
