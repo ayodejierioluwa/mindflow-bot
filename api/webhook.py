@@ -225,7 +225,7 @@ async def process_telegram_update(update_dict: dict):
         reply = f"📋 **{bot_name}'s Priority Board:**\n\n"
         for idx, t in enumerate(tasks, 1):
             due = f" *(Due: {t.get('due_date')})*" if t.get('due_date') else ""
-            reply += f"{idx}. **{t['title']}**{due}\n   └ 🏷 _{t.get('category', 'Personal')}_ &bull; Priority: {t.get('priority', 'medium').capitalize()}\n"
+            reply += f"{idx}. **{t['title']}**{due}\n   └ 🏷 _{t.get('category', 'Personal')}_ • Priority: {t.get('priority', 'medium').capitalize()}\n"
         await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         return
 
