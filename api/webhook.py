@@ -108,10 +108,14 @@ async def process_telegram_update(update_dict: dict):
     # 1. Handle Callback Query (Crypto button tap)
     if update.callback_query:
         cq = update.callback_query
-        if cq.data == "pay_crypto":
+        target_chat_id = cq.message.chat.id if cq.message else cq.from_user.id
+        try:
             await bot.answer_callback_query(cq.id)
-            await send_crypto_instructions(cq.message.chat.id)
-            return
+            if cq.data == "pay_crypto":
+                await send_crypto_instructions(target_chat_id)
+        except Exception as e:
+            logger.error(f"Error handling callback query: {e}")
+        return
 
     # 2. Handle Pre-Checkout Query
     if update.pre_checkout_query:
