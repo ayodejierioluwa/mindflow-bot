@@ -32,9 +32,18 @@ class NoteItem(BaseModel):
     tags: List[str] = Field(default_factory=list, description="Relevant contextual tags")
 
 class ParsedCapture(BaseModel):
-    intent: IntentType = Field(description="Primary category of the captured input")
+    intent: IntentType = Field(description="Primary category of the captured input or 'task' if mixed")
     summary_message: str = Field(description="A user-friendly, friendly confirmation line suitable for Telegram")
-    task: Optional[TaskItem] = None
-    expense: Optional[ExpenseItem] = None
+    tasks: List[TaskItem] = Field(default_factory=list, description="List of actionable tasks detected")
+    expenses: List[ExpenseItem] = Field(default_factory=list, description="List of financial expenses detected")
     note: Optional[NoteItem] = None
     persona: Optional[PersonaItem] = None
+    
+    # Backwards compatibility helpers
+    @property
+    def task(self) -> Optional[TaskItem]:
+        return self.tasks[0] if self.tasks else None
+
+    @property
+    def expense(self) -> Optional[ExpenseItem]:
+        return self.expenses[0] if self.expenses else None

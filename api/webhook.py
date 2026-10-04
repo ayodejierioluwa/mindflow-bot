@@ -24,26 +24,31 @@ TRUST_EVM_WALLET = "0xc51b89d77Efe2D19a6fe7A7cb5a8F587540b6b77"
 
 def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -> str:
     msg = f"{parsed.summary_message}\n\n"
-    if parsed.intent == IntentType.TASK and parsed.task:
-        msg += (
-            f"📋 **Action Item:** {parsed.task.title}\n"
-            f"📅 **Due:** {parsed.task.due_date or 'No date specified'}\n"
-            f"🏷 **Category:** {parsed.task.category} | **Priority:** {parsed.task.priority.capitalize()}\n"
-        )
-    elif parsed.intent == IntentType.EXPENSE and parsed.expense:
-        msg += (
-            f"💳 **Merchant:** {parsed.expense.merchant}\n"
-            f"💰 **Amount:** {parsed.expense.currency} {parsed.expense.amount:.2f}\n"
-            f"📂 **Category:** {parsed.expense.category}\n"
-        )
-    elif parsed.intent == IntentType.NOTE and parsed.note:
+    
+    # Format all extracted tasks
+    if parsed.tasks:
+        msg += "📋 **Action Items:**\n"
+        for t in parsed.tasks:
+            due = f" &bull; _Due: {t.due_date}_" if t.due_date else ""
+            msg += f"• **{t.title}**{due} (_{t.category}_)\n"
+        msg += "\n"
+        
+    # Format all extracted expenses
+    if parsed.expenses:
+        msg += "🧾 **Expenses Logged:**\n"
+        for e in parsed.expenses:
+            msg += f"• **{e.merchant}**: {e.currency} {e.amount:.2f} (_{e.category}_)\n"
+        msg += "\n"
+        
+    if parsed.note:
         tags = " ".join([f"#{t}" for t in parsed.note.tags])
         msg += (
             f"📌 **Title:** {parsed.note.title}\n"
             f"{parsed.note.summary}\n"
-            f"🏷 {tags}\n"
+            f"🏷 {tags}\n\n"
         )
-    msg += f"\n_⚡ Synced to {bot_name} Inbox_"
+        
+    msg += f"_⚡ Synced to {bot_name} Inbox_"
     return msg
 
 async def send_paywall(chat_id: int):
@@ -292,25 +297,25 @@ async def process_telegram_update(update_dict: dict):
         try:
             parsed = await router.parse_text(msg.text)
             
-            # Natural Language Rename Check
-            if parsed.intent == IntentType.SET_PERSONA and parsed.persona:
-                new_name = parsed.persona.name
-                await storage.update_user_bot_name(user_id, new_name)
-                ack = f"✨ Understood! From now on, call me **{new_name}**. How can I assist you, {first_name}?"
-                await bot.send_message(chat_id=msg.chat.id, text=ack, parse_mode=ParseMode.MARKDOWN)
-                return
+            # Handle Persona Rename (if present in compound message)
+            if parsed.persona and parsed.persona.name:
+                bot_name = parsed.persona.name
+                await storage.update_user_bot_name(user_id, bot_name)
 
             new_count = await storage.increment_usage(user_id)
             
-            if parsed.intent == IntentType.TASK and parsed.task:
-                await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
+            # Save ALL parsed tasks
+            for t in parsed.tasks:
+                await storage.save_task(user_id, t.title, t.due_date, t.priority, t.category)
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
                         user_profile["notion_api_key"], user_profile["notion_database_id"],
-                        parsed.task.title, parsed.task.category, parsed.task.due_date, parsed.task.priority
+                        t.title, t.category, t.due_date, t.priority
                     )
-            elif parsed.intent == IntentType.EXPENSE and parsed.expense:
-                await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
+                    
+            # Save ALL parsed expenses
+            for e in parsed.expenses:
+                await storage.save_expense(user_id, e.merchant, e.amount, e.currency, e.category)
 
             reply = format_output(parsed, original_text=msg.text, bot_name=bot_name)
             if not is_pro and new_count >= 10:
@@ -336,25 +341,25 @@ async def process_telegram_update(update_dict: dict):
                 
             parsed = await router.parse_text(transcript)
 
-            # Natural Language Rename Check from Voice
-            if parsed.intent == IntentType.SET_PERSONA and parsed.persona:
-                new_name = parsed.persona.name
-                await storage.update_user_bot_name(user_id, new_name)
-                ack = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n✨ Understood! From now on, call me **{new_name}**. How can I assist you, {first_name}?"
-                await bot.edit_message_text(chat_id=msg.chat.id, message_id=status_msg.message_id, text=ack, parse_mode=ParseMode.MARKDOWN)
-                return
+            # Handle Persona Rename (if present in compound voice note)
+            if parsed.persona and parsed.persona.name:
+                bot_name = parsed.persona.name
+                await storage.update_user_bot_name(user_id, bot_name)
 
             new_count = await storage.increment_usage(user_id)
             
-            if parsed.intent == IntentType.TASK and parsed.task:
-                await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
+            # Save ALL parsed tasks
+            for t in parsed.tasks:
+                await storage.save_task(user_id, t.title, t.due_date, t.priority, t.category)
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
                         user_profile["notion_api_key"], user_profile["notion_database_id"],
-                        parsed.task.title, parsed.task.category, parsed.task.due_date, parsed.task.priority
+                        t.title, t.category, t.due_date, t.priority
                     )
-            elif parsed.intent == IntentType.EXPENSE and parsed.expense:
-                await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
+                    
+            # Save ALL parsed expenses
+            for e in parsed.expenses:
+                await storage.save_expense(user_id, e.merchant, e.amount, e.currency, e.category)
 
             reply = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n" + format_output(parsed, original_text=transcript, bot_name=bot_name)
             if not is_pro and new_count >= 10:
