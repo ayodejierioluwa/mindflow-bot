@@ -14,13 +14,12 @@ from src.transcriber import transcriber
 from src.models import IntentType
 from src.storage import storage, FREE_MONTHLY_LIMIT, PRO_PRICE_STARS
 from src.notion import notion_service
+from src.solana_scanner import solana_scanner, PHANTOM_WALLET
 
 logger = logging.getLogger(__name__)
 
 bot = Bot(token=config.TELEGRAM_BOT_TOKEN) if config.TELEGRAM_BOT_TOKEN else None
 
-# User's deposit addresses for crypto
-PHANTOM_SOLANA_WALLET = "91ykmw5GduzwcqMDorAiRPzJDhbYvWjQACEie7H1jppQ"
 TRUST_EVM_WALLET = "0xc51b89d77Efe2D19a6fe7A7cb5a8F587540b6b77"
 
 def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -> str:
@@ -49,27 +48,12 @@ def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -
 
 async def send_paywall(chat_id: int):
     """Sends native Telegram Stars invoice & Crypto payment options"""
-    text = (
-        "💎 **Upgrade to Mindflow Pro ($4.99 / mo)**\n\n"
-        f"You've used your **{FREE_MONTHLY_LIMIT} free monthly captures**.\n\n"
-        "**Pro Features Unlocked:**\n"
-        "• ⚡ Unlimited voice notes & instant transcription\n"
-        "• 🧾 Automatic receipt & expense parsing\n"
-        "• 📓 Real-time Notion two-way sync\n"
-        "• ☀️ Daily morning intelligence briefings\n"
-        "• 🤖 Custom assistant naming & tone\n\n"
-        "**Choose your preferred payment method below:**\n"
-        "• ⭐️ **Telegram Stars** (Apple Pay / Google Pay)\n"
-        "• 💎 **Crypto** ($5 in SOL or USDT)"
-    )
-
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 Pay with Crypto (USDT / $SOL)", callback_data="pay_crypto")]
     ])
 
     prices = [LabeledPrice(label="Mindflow Pro (Monthly)", amount=PRO_PRICE_STARS)]
     try:
-        # First send Telegram Stars invoice
         await bot.send_invoice(
             chat_id=chat_id,
             title="Mindflow Pro (Telegram Stars)",
@@ -80,24 +64,31 @@ async def send_paywall(chat_id: int):
             prices=prices,
             start_parameter="pro_subscription"
         )
-        # Then send the crypto option button
-        await bot.send_message(chat_id=chat_id, text="Prefer paying with Crypto?", reply_markup=kb)
+        await bot.send_message(chat_id=chat_id, text="Prefer paying with Crypto ($SOL / USDT)?", reply_markup=kb)
     except Exception as e:
         logger.error(f"Error sending paywall: {e}")
-        await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+        await bot.send_message(chat_id=chat_id, text="💎 **Upgrade to Mindflow Pro ($4.99/mo)**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-async def send_crypto_instructions(chat_id: int):
+async def send_crypto_instructions(chat_id: int, user_id: int):
+    expected_sol = solana_scanner.get_user_expected_sol(user_id)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 Verify My Deposit On-Chain", callback_data="verify_sol")]
+    ])
+
     crypto_msg = (
-        "💎 **Pay with Crypto for Mindflow Pro ($5.00)**\n\n"
-        "Transfer **$5.00 USDT or equivalent $SOL** to either wallet:\n\n"
-        "🟣 **Solana Network (SOL or USDT-SPL):**\n"
-        f"`{PHANTOM_SOLANA_WALLET}`\n\n"
-        "🔷 **Multi-Chain EVM (USDT on BNB / Arbitrum / Polygon / Base):**\n"
-        f"`{TRUST_EVM_WALLET}`\n\n"
-        "_(Tap any address to copy instantly)_\n\n"
-        "After transferring, send a screenshot or transaction hash here and your account will be activated immediately! 🚀"
+        "💎 **Automated On-Chain Crypto Upgrade ($5.00)**\n\n"
+        "To prevent collisions and enable **1-click auto-activation**, your unique deposit amount is:\n\n"
+        f"💰 **Exact Amount to Send:** `{expected_sol}` **SOL**\n\n"
+        "🟣 **Solana Receiving Address (Phantom):**\n"
+        f"`{PHANTOM_WALLET}`\n\n"
+        "_(Tap any field to copy)_\n\n"
+        "⚡ **Instructions:**\n"
+        f"1. Send exactly `{expected_sol}` SOL from Phantom or Solflare.\n"
+        "2. Once sent, tap **[ 🔍 Verify My Deposit On-Chain ]** below.\n"
+        "3. Mindflow will verify the blockchain and unlock your Pro account instantly with zero wait time!"
     )
-    await bot.send_message(chat_id=chat_id, text=crypto_msg, parse_mode=ParseMode.MARKDOWN)
+    await bot.send_message(chat_id=chat_id, text=crypto_msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def process_telegram_update(update_dict: dict):
     if not bot:
@@ -105,14 +96,42 @@ async def process_telegram_update(update_dict: dict):
     
     update = types.Update.model_validate(update_dict)
 
-    # 1. Handle Callback Query (Crypto button tap)
+    # 1. Handle Callback Query (Buttons)
     if update.callback_query:
         cq = update.callback_query
         target_chat_id = cq.message.chat.id if cq.message else cq.from_user.id
+        user_id = cq.from_user.id
+        
         try:
-            await bot.answer_callback_query(cq.id)
             if cq.data == "pay_crypto":
-                await send_crypto_instructions(target_chat_id)
+                await bot.answer_callback_query(cq.id)
+                await send_crypto_instructions(target_chat_id, user_id)
+                return
+
+            elif cq.data == "verify_sol":
+                await bot.answer_callback_query(cq.id, text="🔍 Scanning Solana blockchain...")
+                is_valid, msg_or_sig = await solana_scanner.verify_payment(user_id)
+                
+                if is_valid:
+                    await storage.upgrade_user_to_pro(
+                        user_id=user_id,
+                        telegram_charge_id=msg_or_sig,
+                        provider_charge_id="SOLANA_ON_CHAIN",
+                        stars_amount=PRO_PRICE_STARS
+                    )
+                    success_text = (
+                        "⭐️ **Payment Confirmed On-Chain!** ⭐️\n\n"
+                        f"Transaction Hash:\n`{msg_or_sig}`\n\n"
+                        "Your Mindflow Pro subscription is now **ACTIVE**!\n"
+                        "Enjoy unlimited captures, custom naming, and Notion sync."
+                    )
+                    await bot.send_message(chat_id=target_chat_id, text=success_text, parse_mode=ParseMode.MARKDOWN)
+                else:
+                    await bot.send_message(
+                        chat_id=target_chat_id, 
+                        text=f"⚠️ {msg_or_sig}\n\n_If you just sent it, please give Solana 5–10 seconds to confirm and tap verify again!_"
+                    )
+                return
         except Exception as e:
             logger.error(f"Error handling callback query: {e}")
         return
