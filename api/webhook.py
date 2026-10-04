@@ -6,7 +6,7 @@ import asyncio
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
-from aiogram.types import LabeledPrice, PreCheckoutQuery
+from aiogram.types import LabeledPrice, InlineKeyboardMarkup, InlineKeyboardButton
 
 from src.config import config
 from src.router import router
@@ -19,7 +19,11 @@ logger = logging.getLogger(__name__)
 
 bot = Bot(token=config.TELEGRAM_BOT_TOKEN) if config.TELEGRAM_BOT_TOKEN else None
 
-def format_output(parsed, original_text: str = "") -> str:
+# User's deposit addresses for crypto
+PHANTOM_SOLANA_WALLET = "91ykmw5GduzwcqMDorAiRPzJDhbYvWjQACEie7H1jppQ"
+TRUST_EVM_WALLET = "0xc51b89d77Efe2D19a6fe7A7cb5a8F587540b6b77"
+
+def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -> str:
     msg = f"{parsed.summary_message}\n\n"
     if parsed.intent == IntentType.TASK and parsed.task:
         msg += (
@@ -40,36 +44,60 @@ def format_output(parsed, original_text: str = "") -> str:
             f"{parsed.note.summary}\n"
             f"🏷 {tags}\n"
         )
-    msg += "\n_⚡ Synced to Mindflow Inbox_"
+    msg += f"\n_⚡ Synced to {bot_name} Inbox_"
     return msg
 
-async def send_paywall(chat_id: int, current_count: int):
-    """Sends native Telegram Stars invoice for Mindflow Pro"""
+async def send_paywall(chat_id: int):
+    """Sends native Telegram Stars invoice & Crypto payment options"""
     text = (
-        "🔒 **You've reached your free monthly limit!**\n\n"
-        f"You've used all **{FREE_MONTHLY_LIMIT} free monthly captures**.\n\n"
-        "**Upgrade to Mindflow Pro:**\n"
-        "• ⚡ Unlimited high-speed voice notes\n"
-        "• 🧾 Automated receipt & expense parsing\n"
+        "💎 **Upgrade to Mindflow Pro ($4.99 / mo)**\n\n"
+        f"You've used your **{FREE_MONTHLY_LIMIT} free monthly captures**.\n\n"
+        "**Pro Features Unlocked:**\n"
+        "• ⚡ Unlimited voice notes & instant transcription\n"
+        "• 🧾 Automatic receipt & expense parsing\n"
         "• 📓 Real-time Notion two-way sync\n"
-        "• ☀️ Daily morning intelligence briefings\n\n"
-        "Unlock Pro instantly below with Telegram Stars:"
+        "• ☀️ Daily morning intelligence briefings\n"
+        "• 🤖 Custom assistant naming & tone\n\n"
+        "**Choose your preferred payment method below:**\n"
+        "• ⭐️ **Telegram Stars** (Apple Pay / Google Pay)\n"
+        "• 💎 **Crypto** ($5 in SOL or USDT)"
     )
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💎 Pay with Crypto (USDT / $SOL)", callback_data="pay_crypto")]
+    ])
+
     prices = [LabeledPrice(label="Mindflow Pro (Monthly)", amount=PRO_PRICE_STARS)]
     try:
+        # First send Telegram Stars invoice
         await bot.send_invoice(
             chat_id=chat_id,
-            title="Mindflow Pro Subscription",
-            description="Unlimited voice captures, Notion sync, and automated intelligence.",
+            title="Mindflow Pro (Telegram Stars)",
+            description="Unlimited voice captures, Notion sync, and custom naming.",
             payload="mindflow_pro_monthly",
-            provider_token="", # Empty string triggers native Telegram Stars (XTR)!
+            provider_token="", # Native Telegram Stars
             currency="XTR",
             prices=prices,
             start_parameter="pro_subscription"
         )
+        # Then send the crypto option button
+        await bot.send_message(chat_id=chat_id, text="Prefer paying with Crypto?", reply_markup=kb)
     except Exception as e:
-        logger.error(f"Error sending invoice: {e}")
-        await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+        logger.error(f"Error sending paywall: {e}")
+        await bot.send_message(chat_id=chat_id, text=text, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
+
+async def send_crypto_instructions(chat_id: int):
+    crypto_msg = (
+        "💎 **Pay with Crypto for Mindflow Pro ($5.00)**\n\n"
+        "Transfer **$5.00 USDT or equivalent $SOL** to either wallet:\n\n"
+        "🟣 **Solana Network (SOL or USDT-SPL):**\n"
+        f"`{PHANTOM_SOLANA_WALLET}`\n\n"
+        "🔷 **Multi-Chain EVM (USDT on BNB / Arbitrum / Polygon / Base):**\n"
+        f"`{TRUST_EVM_WALLET}`\n\n"
+        "_(Tap any address to copy instantly)_\n\n"
+        "After transferring, send a screenshot or transaction hash here and your account will be activated immediately! 🚀"
+    )
+    await bot.send_message(chat_id=chat_id, text=crypto_msg, parse_mode=ParseMode.MARKDOWN)
 
 async def process_telegram_update(update_dict: dict):
     if not bot:
@@ -77,7 +105,15 @@ async def process_telegram_update(update_dict: dict):
     
     update = types.Update.model_validate(update_dict)
 
-    # 1. Handle Pre-Checkout Query (Must approve within 10s)
+    # 1. Handle Callback Query (Crypto button tap)
+    if update.callback_query:
+        cq = update.callback_query
+        if cq.data == "pay_crypto":
+            await bot.answer_callback_query(cq.id)
+            await send_crypto_instructions(cq.message.chat.id)
+            return
+
+    # 2. Handle Pre-Checkout Query
     if update.pre_checkout_query:
         await bot.answer_pre_checkout_query(pre_checkout_query_id=update.pre_checkout_query.id, ok=True)
         return
@@ -90,7 +126,7 @@ async def process_telegram_update(update_dict: dict):
     username = msg.from_user.username if msg.from_user else None
     first_name = msg.from_user.first_name if msg.from_user else "Friend"
     
-    # 2. Handle Successful Telegram Stars Payment
+    # 3. Handle Successful Telegram Stars Payment
     if msg.successful_payment:
         pay = msg.successful_payment
         await storage.upgrade_user_to_pro(
@@ -101,68 +137,75 @@ async def process_telegram_update(update_dict: dict):
         )
         success_text = (
             "⭐️ **Welcome to Mindflow Pro!** ⭐️\n\n"
-            "Your subscription is now active. All capture limits have been unlocked!\n"
-            "Enjoy unlimited voice notes, seamless Notion sync, and premium intelligence."
+            "Your subscription is now active! All capture limits have been unlocked.\n"
+            "Enjoy unlimited voice notes, Notion sync, and custom naming."
         )
         await bot.send_message(chat_id=msg.chat.id, text=success_text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # Track & upsert user in Supabase
+    # Fetch user profile & custom bot name
     user_profile = None
+    bot_name = "Mindflow"
     if storage.is_configured():
         user_profile = await storage.get_or_create_user(user_id, username, first_name)
+        if user_profile and user_profile.get("bot_name"):
+            bot_name = user_profile["bot_name"]
 
-    # 3. Handle /start
+    # 4. Handle /start
     if msg.text and msg.text.startswith("/start"):
         welcome_text = (
-            f"🌊 **Welcome to Mindflow, {first_name}!**\n"
+            f"🌊 **Welcome to {bot_name}, {first_name}!**\n"
             "_Speak your mind. We handle the flow._\n\n"
-            "Never let a thought, task, or expense slip away.\n\n"
             "**Quick Commands:**\n"
             "• `/tasks` — View your active priorities\n"
             "• `/expenses` — View recent logged expenses\n"
             "• `/briefing` — Get your daily morning agenda\n"
-            "• `/upgrade` — Upgrade to Mindflow Pro (Unlimited)\n"
+            "• `/rename <name>` — Give your assistant a personal name\n"
+            "• `/upgrade` — Upgrade to Pro (Stars or Crypto)\n"
             "• `/notion` — Link your Notion workspace\n\n"
             "**How to capture:**\n"
             "• 🎙 **Voice note:** Hold mic and speak naturally.\n"
-            "• 💬 **Text message:** Quick braindump, task, or spend."
+            "• 💬 **Text:** Thoughts, tasks, expenses, or say _\"From now on your name is Jarvis\"_!"
         )
         await bot.send_message(chat_id=msg.chat.id, text=welcome_text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 4. Handle /upgrade (Direct payment trigger)
+    # 5. Handle /rename <name> shortcut
+    if msg.text and msg.text.startswith("/rename"):
+        parts = msg.text.strip().split(maxsplit=1)
+        if len(parts) > 1:
+            new_name = parts[1].strip()
+            await storage.update_user_bot_name(user_id, new_name)
+            await bot.send_message(chat_id=msg.chat.id, text=f"✨ Done! From now on, call me **{new_name}**. How can I assist you today?")
+            return
+        else:
+            await bot.send_message(chat_id=msg.chat.id, text="Tip: Type `/rename Jarvis` or just say _\"From now on your name is Jarvis\"_!")
+            return
+
+    # 6. Handle /upgrade
     if msg.text and msg.text.startswith("/upgrade"):
-        await send_paywall(msg.chat.id, 0)
+        await send_paywall(msg.chat.id)
         return
 
-    # 5. Handle /tasks
+    # 7. Handle /tasks
     if msg.text and msg.text.startswith("/tasks"):
         tasks = await storage.get_recent_tasks(user_id)
         if not tasks:
-            await bot.send_message(
-                chat_id=msg.chat.id, 
-                text="✨ **Inbox Zero!** You have no open tasks.\nSend a voice note to add one!"
-            )
+            await bot.send_message(chat_id=msg.chat.id, text="✨ **Inbox Zero!** You have no open tasks.\nSend a voice note to add one!")
             return
         
-        reply = "📋 **Your Open Priorities:**\n\n"
+        reply = f"📋 **{bot_name}'s Priority Board:**\n\n"
         for idx, t in enumerate(tasks, 1):
             due = f" *(Due: {t.get('due_date')})*" if t.get('due_date') else ""
             reply += f"{idx}. **{t['title']}**{due}\n   └ 🏷 _{t.get('category', 'Personal')}_ &bull; Priority: {t.get('priority', 'medium').capitalize()}\n"
-        
-        reply += "\n_Tip: Type or speak a new task anytime to add to this list._"
         await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 6. Handle /expenses
+    # 8. Handle /expenses
     if msg.text and msg.text.startswith("/expenses"):
         expenses = await storage.get_recent_expenses(user_id)
         if not expenses:
-            await bot.send_message(
-                chat_id=msg.chat.id,
-                text="💳 **No expenses recorded yet.**\nTry typing: _\"Spent $24 on lunch at Chipotle\"_"
-            )
+            await bot.send_message(chat_id=msg.chat.id, text="💳 **No expenses recorded yet.**\nTry: _\"Spent $24 on lunch at Chipotle\"_")
             return
         
         total = sum(float(e.get('amount', 0)) for e in expenses)
@@ -170,58 +213,45 @@ async def process_telegram_update(update_dict: dict):
         reply = f"💰 **Recent Expenses (Total: {currency} {total:.2f}):**\n\n"
         for idx, e in enumerate(expenses, 1):
             reply += f"{idx}. **{e['merchant']}** — {e['currency']} {float(e['amount']):.2f} (_{e['category']}_)\n"
-        
         await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 7. Handle /briefing (Morning Agenda)
+    # 9. Handle /briefing
     if msg.text and msg.text.startswith("/briefing"):
         tasks = await storage.get_recent_tasks(user_id)
-        greeting = f"☀️ **Good day, {first_name}!**\n\nHere is your Mindflow Daily Briefing:\n\n"
+        greeting = f"☀️ **Good day, {first_name}!**\n\nHere is your {bot_name} Daily Briefing:\n\n"
         if tasks:
             greeting += "🎯 **Today's Key Focus Areas:**\n"
             for idx, t in enumerate(tasks[:3], 1):
                 due = f" ({t.get('due_date')})" if t.get('due_date') else ""
                 greeting += f"• **{t['title']}**{due}\n"
         else:
-            greeting += "✨ You have a clean slate today! What are you building today?\n"
-            
-        greeting += "\n_Speak or text me anytime to capture your thoughts on the go._"
+            greeting += "✨ Clean slate today! What are we conquering?\n"
+        greeting += f"\n_{bot_name} is standing by._"
         await bot.send_message(chat_id=msg.chat.id, text=greeting, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 8. Handle /connect_notion <KEY> <DB_ID>
+    # 10. Handle /connect_notion
     if msg.text and msg.text.startswith("/connect_notion"):
         parts = msg.text.strip().split()
         if len(parts) < 3:
-            await bot.send_message(
-                chat_id=msg.chat.id,
-                text="⚠️ **Format:** `/connect_notion <NOTION_SECRET_KEY> <DATABASE_ID>`\n\nExample:\n`/connect_notion ntn_12345... 8ab7f89c...`"
-            )
+            await bot.send_message(chat_id=msg.chat.id, text="⚠️ **Format:** `/connect_notion <NOTION_KEY> <DATABASE_ID>`")
             return
-        
-        n_key = parts[1]
-        n_db = parts[2]
-        success = await storage.update_user_notion(user_id, n_key, n_db)
+        success = await storage.update_user_notion(user_id, parts[1], parts[2])
         if success:
-            await bot.send_message(
-                chat_id=msg.chat.id,
-                text="✅ **Notion Workspace Linked Successfully!**\nAll your future tasks and notes will automatically sync into your Notion database in real-time."
-            )
+            await bot.send_message(chat_id=msg.chat.id, text="✅ **Notion Workspace Linked Successfully!**")
         else:
-            await bot.send_message(chat_id=msg.chat.id, text="⚠️ Error saving your Notion credentials. Please try again.")
+            await bot.send_message(chat_id=msg.chat.id, text="⚠️ Error saving your Notion credentials.")
         return
 
-    # 9. Handle /notion guide
+    # 11. Handle /notion guide
     if msg.text and msg.text.startswith("/notion"):
         notion_guide = (
-            "📓 **Connect Mindflow to Notion in 30 Seconds:**\n\n"
-            "1. Duplicate the official **Mindflow Notion Template**:\n"
-            "👉 `https://mindflow.so/notion-template`\n\n"
-            "2. Create an integration token at [notion.so/my-integrations](https://www.notion.so/my-integrations).\n\n"
-            "3. Link it by replying here with:\n"
-            "`/connect_notion <YOUR_SECRET_KEY> <DATABASE_ID>`\n\n"
-            "_(Tasks will sync directly to your personal Kanban board!)_"
+            "📓 **Connect to Notion in 30 Seconds:**\n\n"
+            "1. Duplicate the template: `https://mindflow.so/notion-template`\n"
+            "2. Create a token at [notion.so/my-integrations](https://www.notion.so/my-integrations)\n"
+            "3. Link by sending:\n"
+            "`/connect_notion <YOUR_SECRET_KEY> <DATABASE_ID>`"
         )
         await bot.send_message(chat_id=msg.chat.id, text=notion_guide, parse_mode=ParseMode.MARKDOWN)
         return
@@ -231,33 +261,35 @@ async def process_telegram_update(update_dict: dict):
     # ----------------------------------------------------
     can_execute, current_count, is_pro = await storage.can_user_execute(user_id)
     if not can_execute:
-        await send_paywall(msg.chat.id, current_count)
+        await send_paywall(msg.chat.id)
         return
 
-    # 10. Handle Text
+    # 12. Handle Text (including natural-language renaming)
     if msg.text:
         try:
             parsed = await router.parse_text(msg.text)
             
-            # Increment quota count
+            # Natural Language Rename Check
+            if parsed.intent == IntentType.SET_PERSONA and parsed.persona:
+                new_name = parsed.persona.name
+                await storage.update_user_bot_name(user_id, new_name)
+                ack = f"✨ Understood! From now on, call me **{new_name}**. How can I assist you, {first_name}?"
+                await bot.send_message(chat_id=msg.chat.id, text=ack, parse_mode=ParseMode.MARKDOWN)
+                return
+
             new_count = await storage.increment_usage(user_id)
             
-            # Persist to Supabase
             if parsed.intent == IntentType.TASK and parsed.task:
                 await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
-                        user_profile["notion_api_key"],
-                        user_profile["notion_database_id"],
-                        parsed.task.title,
-                        parsed.task.category,
-                        parsed.task.due_date,
-                        parsed.task.priority
+                        user_profile["notion_api_key"], user_profile["notion_database_id"],
+                        parsed.task.title, parsed.task.category, parsed.task.due_date, parsed.task.priority
                     )
             elif parsed.intent == IntentType.EXPENSE and parsed.expense:
                 await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
 
-            reply = format_output(parsed, original_text=msg.text)
+            reply = format_output(parsed, original_text=msg.text, bot_name=bot_name)
             if not is_pro and new_count >= 10:
                 reply += f"\n_📊 Free Quota: {new_count}/{FREE_MONTHLY_LIMIT} captures used._"
             await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
@@ -266,7 +298,7 @@ async def process_telegram_update(update_dict: dict):
             await bot.send_message(chat_id=msg.chat.id, text=f"⚠️ Error: {str(e)}")
         return
 
-    # 11. Handle Voice
+    # 13. Handle Voice (including voice renaming)
     if msg.voice:
         try:
             status_msg = await bot.send_message(chat_id=msg.chat.id, text="🎧 _Listening and transcribing..._", parse_mode=ParseMode.MARKDOWN)
@@ -280,26 +312,28 @@ async def process_telegram_update(update_dict: dict):
                 os.remove(local_path)
                 
             parsed = await router.parse_text(transcript)
-            
-            # Increment quota count
+
+            # Natural Language Rename Check from Voice
+            if parsed.intent == IntentType.SET_PERSONA and parsed.persona:
+                new_name = parsed.persona.name
+                await storage.update_user_bot_name(user_id, new_name)
+                ack = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n✨ Understood! From now on, call me **{new_name}**. How can I assist you, {first_name}?"
+                await bot.edit_message_text(chat_id=msg.chat.id, message_id=status_msg.message_id, text=ack, parse_mode=ParseMode.MARKDOWN)
+                return
+
             new_count = await storage.increment_usage(user_id)
             
-            # Persist to Supabase
             if parsed.intent == IntentType.TASK and parsed.task:
                 await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
-                        user_profile["notion_api_key"],
-                        user_profile["notion_database_id"],
-                        parsed.task.title,
-                        parsed.task.category,
-                        parsed.task.due_date,
-                        parsed.task.priority
+                        user_profile["notion_api_key"], user_profile["notion_database_id"],
+                        parsed.task.title, parsed.task.category, parsed.task.due_date, parsed.task.priority
                     )
             elif parsed.intent == IntentType.EXPENSE and parsed.expense:
                 await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
 
-            reply = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n" + format_output(parsed, original_text=transcript)
+            reply = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n" + format_output(parsed, original_text=transcript, bot_name=bot_name)
             if not is_pro and new_count >= 10:
                 reply += f"\n_📊 Free Quota: {new_count}/{FREE_MONTHLY_LIMIT} captures used._"
             await bot.edit_message_text(chat_id=msg.chat.id, message_id=status_msg.message_id, text=reply, parse_mode=ParseMode.MARKDOWN)

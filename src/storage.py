@@ -91,8 +91,6 @@ class StorageService:
         if not self.is_configured():
             return False
         headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
-        
-        # 1. Update user to Pro
         user_url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
         payment_url = f"{self.url}/rest/v1/payments"
         payment_payload = {
@@ -110,6 +108,19 @@ class StorageService:
                 return True
         except Exception as e:
             logger.error(f"Error upgrading user to Pro: {e}")
+            return False
+
+    async def update_user_bot_name(self, user_id: int, bot_name: str) -> bool:
+        if not self.is_configured():
+            return False
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
+        url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.patch(url, headers=headers, json={"bot_name": bot_name})
+                return res.status_code in [200, 204]
+        except Exception as e:
+            logger.error(f"Error updating bot name: {e}")
             return False
 
     async def update_user_notion(self, user_id: int, notion_key: str, notion_db: str) -> bool:

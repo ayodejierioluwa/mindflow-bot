@@ -7,6 +7,11 @@ class IntentType(str, Enum):
     EXPENSE = "expense"
     NOTE = "note"
     READ_LATER = "read_later"
+    SET_PERSONA = "set_persona"
+
+class PersonaItem(BaseModel):
+    name: str = Field(description="The desired new name the user wants to call their assistant, e.g. Jarvis, Friday, Nova, Alfred")
+
 
 class TaskItem(BaseModel):
     title: str = Field(description="Clear, actionable task title")
@@ -32,3 +37,4 @@ class ParsedCapture(BaseModel):
     task: Optional[TaskItem] = None
     expense: Optional[ExpenseItem] = None
     note: Optional[NoteItem] = None
+    persona: Optional[PersonaItem] = None
