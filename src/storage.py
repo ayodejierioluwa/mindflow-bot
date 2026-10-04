@@ -8,6 +8,9 @@ logger = logging.getLogger(__name__)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://egxktyspvseakunwvbbv.supabase.co")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_jfo26Dh0d56L7w-eyqyxdA_afstPfca")
 
+FREE_MONTHLY_LIMIT = 15
+PRO_PRICE_STARS = 250  # 250 Telegram Stars (~$4.99)
+
 class StorageService:
     def __init__(self):
         self.url = SUPABASE_URL
@@ -40,6 +43,74 @@ class StorageService:
         except Exception as e:
             logger.error(f"Supabase user error: {e}")
             return None
+
+    async def can_user_execute(self, user_id: int) -> tuple[bool, int, bool]:
+        """
+        Returns (can_execute, current_count, is_pro)
+        """
+        if not self.is_configured():
+            return True, 0, True
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+        url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200 and res.json():
+                    u = res.json()[0]
+                    is_pro = u.get("is_pro", False)
+                    count = u.get("usage_count", 0) or 0
+                    if is_pro:
+                        return True, count, True
+                    if count < FREE_MONTHLY_LIMIT:
+                        return True, count, False
+                    return False, count, False
+                return True, 0, False
+        except Exception as e:
+            logger.error(f"Error checking user quota: {e}")
+            return True, 0, False
+
+    async def increment_usage(self, user_id: int) -> int:
+        if not self.is_configured():
+            return 1
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
+        # Fetch current count
+        url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200 and res.json():
+                    current = res.json()[0].get("usage_count", 0) or 0
+                    new_count = current + 1
+                    await client.patch(url, headers=headers, json={"usage_count": new_count})
+                    return new_count
+        except Exception as e:
+            logger.error(f"Error incrementing usage: {e}")
+        return 1
+
+    async def upgrade_user_to_pro(self, user_id: int, telegram_charge_id: str, provider_charge_id: str, stars_amount: int) -> bool:
+        if not self.is_configured():
+            return False
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
+        
+        # 1. Update user to Pro
+        user_url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+        payment_url = f"{self.url}/rest/v1/payments"
+        payment_payload = {
+            "user_id": user_id,
+            "telegram_charge_id": telegram_charge_id,
+            "provider_payment_charge_id": provider_charge_id,
+            "amount": stars_amount,
+            "currency": "XTR",
+            "status": "successful"
+        }
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                await client.patch(user_url, headers=headers, json={"is_pro": True})
+                await client.post(payment_url, headers=headers, json=payment_payload)
+                return True
+        except Exception as e:
+            logger.error(f"Error upgrading user to Pro: {e}")
+            return False
 
     async def update_user_notion(self, user_id: int, notion_key: str, notion_db: str) -> bool:
         if not self.is_configured():

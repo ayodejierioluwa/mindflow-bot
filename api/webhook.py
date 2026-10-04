@@ -6,12 +6,13 @@ import asyncio
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.enums import ParseMode
+from aiogram.types import LabeledPrice, PreCheckoutQuery
 
 from src.config import config
 from src.router import router
 from src.transcriber import transcriber
 from src.models import IntentType
-from src.storage import storage
+from src.storage import storage, FREE_MONTHLY_LIMIT, PRO_PRICE_STARS
 from src.notion import notion_service
 
 logger = logging.getLogger(__name__)
@@ -42,11 +43,45 @@ def format_output(parsed, original_text: str = "") -> str:
     msg += "\n_⚡ Synced to Mindflow Inbox_"
     return msg
 
+async def send_paywall(chat_id: int, current_count: int):
+    """Sends native Telegram Stars invoice for Mindflow Pro"""
+    text = (
+        "🔒 **You've reached your free monthly limit!**\n\n"
+        f"You've used all **{FREE_MONTHLY_LIMIT} free monthly captures**.\n\n"
+        "**Upgrade to Mindflow Pro:**\n"
+        "• ⚡ Unlimited high-speed voice notes\n"
+        "• 🧾 Automated receipt & expense parsing\n"
+        "• 📓 Real-time Notion two-way sync\n"
+        "• ☀️ Daily morning intelligence briefings\n\n"
+        "Unlock Pro instantly below with Telegram Stars:"
+    )
+    prices = [LabeledPrice(label="Mindflow Pro (Monthly)", amount=PRO_PRICE_STARS)]
+    try:
+        await bot.send_invoice(
+            chat_id=chat_id,
+            title="Mindflow Pro Subscription",
+            description="Unlimited voice captures, Notion sync, and automated intelligence.",
+            payload="mindflow_pro_monthly",
+            provider_token="", # Empty string triggers native Telegram Stars (XTR)!
+            currency="XTR",
+            prices=prices,
+            start_parameter="pro_subscription"
+        )
+    except Exception as e:
+        logger.error(f"Error sending invoice: {e}")
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+
 async def process_telegram_update(update_dict: dict):
     if not bot:
         return
     
     update = types.Update.model_validate(update_dict)
+
+    # 1. Handle Pre-Checkout Query (Must approve within 10s)
+    if update.pre_checkout_query:
+        await bot.answer_pre_checkout_query(pre_checkout_query_id=update.pre_checkout_query.id, ok=True)
+        return
+
     if not update.message:
         return
 
@@ -55,12 +90,29 @@ async def process_telegram_update(update_dict: dict):
     username = msg.from_user.username if msg.from_user else None
     first_name = msg.from_user.first_name if msg.from_user else "Friend"
     
+    # 2. Handle Successful Telegram Stars Payment
+    if msg.successful_payment:
+        pay = msg.successful_payment
+        await storage.upgrade_user_to_pro(
+            user_id=user_id,
+            telegram_charge_id=pay.telegram_payment_charge_id,
+            provider_charge_id=pay.provider_payment_charge_id,
+            stars_amount=pay.total_amount
+        )
+        success_text = (
+            "⭐️ **Welcome to Mindflow Pro!** ⭐️\n\n"
+            "Your subscription is now active. All capture limits have been unlocked!\n"
+            "Enjoy unlimited voice notes, seamless Notion sync, and premium intelligence."
+        )
+        await bot.send_message(chat_id=msg.chat.id, text=success_text, parse_mode=ParseMode.MARKDOWN)
+        return
+
     # Track & upsert user in Supabase
     user_profile = None
     if storage.is_configured():
         user_profile = await storage.get_or_create_user(user_id, username, first_name)
 
-    # 1. Handle /start
+    # 3. Handle /start
     if msg.text and msg.text.startswith("/start"):
         welcome_text = (
             f"🌊 **Welcome to Mindflow, {first_name}!**\n"
@@ -70,6 +122,7 @@ async def process_telegram_update(update_dict: dict):
             "• `/tasks` — View your active priorities\n"
             "• `/expenses` — View recent logged expenses\n"
             "• `/briefing` — Get your daily morning agenda\n"
+            "• `/upgrade` — Upgrade to Mindflow Pro (Unlimited)\n"
             "• `/notion` — Link your Notion workspace\n\n"
             "**How to capture:**\n"
             "• 🎙 **Voice note:** Hold mic and speak naturally.\n"
@@ -78,7 +131,12 @@ async def process_telegram_update(update_dict: dict):
         await bot.send_message(chat_id=msg.chat.id, text=welcome_text, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 2. Handle /tasks
+    # 4. Handle /upgrade (Direct payment trigger)
+    if msg.text and msg.text.startswith("/upgrade"):
+        await send_paywall(msg.chat.id, 0)
+        return
+
+    # 5. Handle /tasks
     if msg.text and msg.text.startswith("/tasks"):
         tasks = await storage.get_recent_tasks(user_id)
         if not tasks:
@@ -97,7 +155,7 @@ async def process_telegram_update(update_dict: dict):
         await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 3. Handle /expenses
+    # 6. Handle /expenses
     if msg.text and msg.text.startswith("/expenses"):
         expenses = await storage.get_recent_expenses(user_id)
         if not expenses:
@@ -116,7 +174,7 @@ async def process_telegram_update(update_dict: dict):
         await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 4. Handle /briefing (Morning Agenda)
+    # 7. Handle /briefing (Morning Agenda)
     if msg.text and msg.text.startswith("/briefing"):
         tasks = await storage.get_recent_tasks(user_id)
         greeting = f"☀️ **Good day, {first_name}!**\n\nHere is your Mindflow Daily Briefing:\n\n"
@@ -132,7 +190,7 @@ async def process_telegram_update(update_dict: dict):
         await bot.send_message(chat_id=msg.chat.id, text=greeting, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 5. Handle /connect_notion <KEY> <DB_ID>
+    # 8. Handle /connect_notion <KEY> <DB_ID>
     if msg.text and msg.text.startswith("/connect_notion"):
         parts = msg.text.strip().split()
         if len(parts) < 3:
@@ -154,7 +212,7 @@ async def process_telegram_update(update_dict: dict):
             await bot.send_message(chat_id=msg.chat.id, text="⚠️ Error saving your Notion credentials. Please try again.")
         return
 
-    # 6. Handle /notion guide
+    # 9. Handle /notion guide
     if msg.text and msg.text.startswith("/notion"):
         notion_guide = (
             "📓 **Connect Mindflow to Notion in 30 Seconds:**\n\n"
@@ -168,15 +226,25 @@ async def process_telegram_update(update_dict: dict):
         await bot.send_message(chat_id=msg.chat.id, text=notion_guide, parse_mode=ParseMode.MARKDOWN)
         return
 
-    # 7. Handle Text
+    # ----------------------------------------------------
+    # QUOTA CHECK (Freemium Paywall Gate)
+    # ----------------------------------------------------
+    can_execute, current_count, is_pro = await storage.can_user_execute(user_id)
+    if not can_execute:
+        await send_paywall(msg.chat.id, current_count)
+        return
+
+    # 10. Handle Text
     if msg.text:
         try:
             parsed = await router.parse_text(msg.text)
             
+            # Increment quota count
+            new_count = await storage.increment_usage(user_id)
+            
             # Persist to Supabase
             if parsed.intent == IntentType.TASK and parsed.task:
                 await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
-                # Sync to Notion if user connected it
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
                         user_profile["notion_api_key"],
@@ -190,13 +258,15 @@ async def process_telegram_update(update_dict: dict):
                 await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
 
             reply = format_output(parsed, original_text=msg.text)
+            if not is_pro and new_count >= 10:
+                reply += f"\n_📊 Free Quota: {new_count}/{FREE_MONTHLY_LIMIT} captures used._"
             await bot.send_message(chat_id=msg.chat.id, text=reply, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error handling text: {e}")
             await bot.send_message(chat_id=msg.chat.id, text=f"⚠️ Error: {str(e)}")
         return
 
-    # 8. Handle Voice
+    # 11. Handle Voice
     if msg.voice:
         try:
             status_msg = await bot.send_message(chat_id=msg.chat.id, text="🎧 _Listening and transcribing..._", parse_mode=ParseMode.MARKDOWN)
@@ -211,10 +281,12 @@ async def process_telegram_update(update_dict: dict):
                 
             parsed = await router.parse_text(transcript)
             
+            # Increment quota count
+            new_count = await storage.increment_usage(user_id)
+            
             # Persist to Supabase
             if parsed.intent == IntentType.TASK and parsed.task:
                 await storage.save_task(user_id, parsed.task.title, parsed.task.due_date, parsed.task.priority, parsed.task.category)
-                # Sync to Notion if user connected it
                 if user_profile and user_profile.get("notion_api_key") and user_profile.get("notion_database_id"):
                     await notion_service.create_page(
                         user_profile["notion_api_key"],
@@ -228,6 +300,8 @@ async def process_telegram_update(update_dict: dict):
                 await storage.save_expense(user_id, parsed.expense.merchant, parsed.expense.amount, parsed.expense.currency, parsed.expense.category)
 
             reply = f"📝 *Transcript:*\n_\"{transcript}\"_\n\n" + format_output(parsed, original_text=transcript)
+            if not is_pro and new_count >= 10:
+                reply += f"\n_📊 Free Quota: {new_count}/{FREE_MONTHLY_LIMIT} captures used._"
             await bot.edit_message_text(chat_id=msg.chat.id, message_id=status_msg.message_id, text=reply, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error handling voice: {e}")
