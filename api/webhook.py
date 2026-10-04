@@ -18,8 +18,6 @@ from src.solana_scanner import solana_scanner, PHANTOM_WALLET
 
 logger = logging.getLogger(__name__)
 
-bot = Bot(token=config.TELEGRAM_BOT_TOKEN) if config.TELEGRAM_BOT_TOKEN else None
-
 TRUST_EVM_WALLET = "0xc51b89d77Efe2D19a6fe7A7cb5a8F587540b6b77"
 
 def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -> str:
@@ -51,7 +49,7 @@ def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -
     msg += f"_⚡ Synced to {bot_name} Inbox_"
     return msg
 
-async def send_paywall(chat_id: int):
+async def send_paywall(bot: Bot, chat_id: int):
     """Sends native Telegram Stars invoice & Crypto payment options"""
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💎 Pay with Crypto (USDT / $SOL)", callback_data="pay_crypto")]
@@ -74,7 +72,7 @@ async def send_paywall(chat_id: int):
         logger.error(f"Error sending paywall: {e}")
         await bot.send_message(chat_id=chat_id, text="💎 **Upgrade to Mindflow Pro ($4.99/mo)**", reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
-async def send_crypto_instructions(chat_id: int, user_id: int):
+async def send_crypto_instructions(bot: Bot, chat_id: int, user_id: int):
     expected_sol = solana_scanner.get_user_expected_sol(user_id)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -96,9 +94,17 @@ async def send_crypto_instructions(chat_id: int, user_id: int):
     await bot.send_message(chat_id=chat_id, text=crypto_msg, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 async def process_telegram_update(update_dict: dict):
-    if not bot:
+    if not config.TELEGRAM_BOT_TOKEN:
         return
     
+    # Create fresh bot instance per request to prevent session event-loop hanging on warm serverless containers
+    bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+    try:
+        await _handle_update_core(bot, update_dict)
+    finally:
+        await bot.session.close()
+
+async def _handle_update_core(bot: Bot, update_dict: dict):
     update = types.Update.model_validate(update_dict)
 
     # 1. Handle Callback Query (Buttons)
@@ -110,7 +116,7 @@ async def process_telegram_update(update_dict: dict):
         try:
             if cq.data == "pay_crypto":
                 await bot.answer_callback_query(cq.id)
-                await send_crypto_instructions(target_chat_id, user_id)
+                await send_crypto_instructions(bot, target_chat_id, user_id)
                 return
 
             elif cq.data == "verify_sol":
@@ -120,13 +126,13 @@ async def process_telegram_update(update_dict: dict):
                 if is_valid:
                     await storage.upgrade_user_to_pro(
                         user_id=user_id,
-                        telegram_charge_id=msg_or_sig,
-                        provider_charge_id="SOLANA_ON_CHAIN",
+                        telegram_charge_id=f"sol_{msg_or_sig[:16]}",
+                        provider_charge_id=msg_or_sig,
                         stars_amount=PRO_PRICE_STARS
                     )
                     success_text = (
-                        "⭐️ **Payment Confirmed On-Chain!** ⭐️\n\n"
-                        f"Transaction Hash:\n`{msg_or_sig}`\n\n"
+                        "🎉 **Solana Deposit Confirmed On-Chain!**\n\n"
+                        f"Tx Signature: `{msg_or_sig[:24]}...`\n\n"
                         "Your Mindflow Pro subscription is now **ACTIVE**!\n"
                         "Enjoy unlimited captures, custom naming, and Notion sync."
                     )
@@ -212,7 +218,7 @@ async def process_telegram_update(update_dict: dict):
 
     # 6. Handle /upgrade
     if msg.text and msg.text.startswith("/upgrade"):
-        await send_paywall(msg.chat.id)
+        await send_paywall(bot, msg.chat.id)
         return
 
     # 7. Handle /tasks
@@ -249,13 +255,12 @@ async def process_telegram_update(update_dict: dict):
         tasks = await storage.get_recent_tasks(user_id)
         greeting = f"☀️ **Good day, {first_name}!**\n\nHere is your {bot_name} Daily Briefing:\n\n"
         if tasks:
-            greeting += "🎯 **Today's Key Focus Areas:**\n"
-            for idx, t in enumerate(tasks[:3], 1):
+            greeting += "🎯 **Today's Key Priorities:**\n"
+            for idx, t in enumerate(tasks[:5], 1):
                 due = f" ({t.get('due_date')})" if t.get('due_date') else ""
-                greeting += f"• **{t['title']}**{due}\n"
+                greeting += f"• **{t['title']}**{due} [_{t.get('priority', 'medium').capitalize()}_]\n"
         else:
-            greeting += "✨ Clean slate today! What are we conquering?\n"
-        greeting += f"\n_{bot_name} is standing by._"
+            greeting += "✨ You have a clean slate! Enjoy your day."
         await bot.send_message(chat_id=msg.chat.id, text=greeting, parse_mode=ParseMode.MARKDOWN)
         return
 
@@ -263,7 +268,10 @@ async def process_telegram_update(update_dict: dict):
     if msg.text and msg.text.startswith("/connect_notion"):
         parts = msg.text.strip().split()
         if len(parts) < 3:
-            await bot.send_message(chat_id=msg.chat.id, text="⚠️ **Format:** `/connect_notion <NOTION_KEY> <DATABASE_ID>`")
+            await bot.send_message(
+                chat_id=msg.chat.id,
+                text="⚠️ **Format:** `/connect_notion <NOTION_SECRET_KEY> <DATABASE_ID>`"
+            )
             return
         success = await storage.update_user_notion(user_id, parts[1], parts[2])
         if success:
@@ -289,7 +297,7 @@ async def process_telegram_update(update_dict: dict):
     # ----------------------------------------------------
     can_execute, current_count, is_pro = await storage.can_user_execute(user_id)
     if not can_execute:
-        await send_paywall(msg.chat.id)
+        await send_paywall(bot, msg.chat.id)
         return
 
     # 12. Handle Text (including natural-language renaming)
@@ -326,13 +334,22 @@ async def process_telegram_update(update_dict: dict):
             await bot.send_message(chat_id=msg.chat.id, text=f"⚠️ Error: {str(e)}")
         return
 
-    # 13. Handle Voice (including voice renaming)
+    # 13. Handle Voice or Audio files (including mp3 voice notes / files)
+    file_id = None
     if msg.voice:
+        file_id = msg.voice.file_id
+    elif msg.audio:
+        file_id = msg.audio.file_id
+    elif msg.document and msg.document.mime_type and any(t in msg.document.mime_type for t in ["audio", "ogg", "mp3", "m4a", "wav"]):
+        file_id = msg.document.file_id
+
+    if file_id:
         try:
             status_msg = await bot.send_message(chat_id=msg.chat.id, text="🎧 _Listening and transcribing..._", parse_mode=ParseMode.MARKDOWN)
-            file_info = await bot.get_file(msg.voice.file_id)
+            file_info = await bot.get_file(file_id)
             
-            local_path = f"/tmp/{msg.voice.file_id}.ogg"
+            ext = ".mp3" if msg.audio else ".ogg"
+            local_path = f"/tmp/{file_id}{ext}"
             await bot.download_file(file_info.file_path, local_path)
             
             transcript = await transcriber.transcribe(local_path)
@@ -367,7 +384,7 @@ async def process_telegram_update(update_dict: dict):
             await bot.edit_message_text(chat_id=msg.chat.id, message_id=status_msg.message_id, text=reply, parse_mode=ParseMode.MARKDOWN)
         except Exception as e:
             logger.error(f"Error handling voice: {e}")
-            await bot.send_message(chat_id=msg.chat.id, text=f"⚠️ Error processing voice: {str(e)}")
+            await bot.send_message(chat_id=msg.chat.id, text=f"⚠️ Error processing audio: {str(e)}")
         return
 
 class handler(BaseHTTPRequestHandler):
