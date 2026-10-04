@@ -5,8 +5,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://egxktyspvseakunwvbbv.supabase.co")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_jfo26Dh0d56L7w-eyqyxdA_afstPfca")
 
 class StorageService:
     def __init__(self):
@@ -31,7 +31,8 @@ class StorageService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 res = await client.post(url, headers=headers, json=payload)
                 if res.status_code in [200, 201]:
-                    return res.json()[0]
+                    data = res.json()
+                    return data[0] if data else None
                 # If already exists, fetch
                 get_res = await client.get(f"{url}?id=eq.{user_id}", headers=headers)
                 data = get_res.json()
@@ -39,6 +40,24 @@ class StorageService:
         except Exception as e:
             logger.error(f"Supabase user error: {e}")
             return None
+
+    async def update_user_notion(self, user_id: int, notion_key: str, notion_db: str) -> bool:
+        if not self.is_configured():
+            return False
+        headers = {
+            "apikey": self.key,
+            "Authorization": f"Bearer {self.key}",
+            "Content-Type": "application/json"
+        }
+        url = f"{self.url}/rest/v1/users?id=eq.{user_id}"
+        payload = {"notion_api_key": notion_key, "notion_database_id": notion_db}
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.patch(url, headers=headers, json=payload)
+                return res.status_code in [200, 204]
+        except Exception as e:
+            logger.error(f"Error updating notion config: {e}")
+            return False
 
     async def save_task(self, user_id: int, title: str, due_date: Optional[str] = None, priority: str = "medium", category: str = "Personal") -> bool:
         if not self.is_configured():
@@ -68,7 +87,7 @@ class StorageService:
             logger.error(f"Error saving expense: {e}")
             return False
 
-    async def get_recent_tasks(self, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    async def get_recent_tasks(self, user_id: int, limit: int = 8) -> List[Dict[str, Any]]:
         if not self.is_configured():
             return []
         headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
@@ -79,6 +98,19 @@ class StorageService:
                 return res.json() if res.status_code == 200 else []
         except Exception as e:
             logger.error(f"Error fetching tasks: {e}")
+            return []
+
+    async def get_recent_expenses(self, user_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        if not self.is_configured():
+            return []
+        headers = {"apikey": self.key, "Authorization": f"Bearer {self.key}"}
+        url = f"{self.url}/rest/v1/expenses?user_id=eq.{user_id}&order=created_at.desc&limit={limit}"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(url, headers=headers)
+                return res.json() if res.status_code == 200 else []
+        except Exception as e:
+            logger.error(f"Error fetching expenses: {e}")
             return []
 
 storage = StorageService()
