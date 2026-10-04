@@ -29,7 +29,7 @@ def format_output(parsed, original_text: str = "", bot_name: str = "Mindflow") -
     if parsed.tasks:
         msg += "📋 **Action Items:**\n"
         for t in parsed.tasks:
-            due = f" &bull; _Due: {t.due_date}_" if t.due_date else ""
+            due = f" • _Due: {t.due_date}_" if t.due_date else ""
             msg += f"• **{t.title}**{due} (_{t.category}_)\n"
         msg += "\n"
         
