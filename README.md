@@ -53,3 +53,10 @@ Mindflow is an AI-powered Telegram personal assistant that transforms voice note
 ## 📈 Distribution & Growth Playbook
 - **X / Twitter**: Post 15-second screencasts of voice capture while on the move $\rightarrow$ organized Notion/Todoist board.
 - **Reddit**: Share in `r/productivity`, `r/Notion`, `r/ADHD`, and `r/SideProject`.
+
+---
+
+## 🔒 Intellectual Property & Confidentiality Notice
+**Proprietary & Confidential — All Rights Reserved (© 2026 Erioluwa Ayodeji / 0xtryhardx0).**  
+This software, its architecture, cryptographic workflows, and interface designs are proprietary intellectual property protected under the **Nigerian Copyright Commission (NCC)** Literary/Software Works Registry and international copyright treaties. Viewing this repository for evaluation or demonstration does **not** grant any license to copy, fork, modify, reverse-engineer, white-label, or deploy any part of this system without a prior executed Commercial License Agreement or MoU. See [LICENSE](./LICENSE) for full legal terms.
+
